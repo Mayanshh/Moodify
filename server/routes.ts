@@ -76,7 +76,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
     
     if (!clientId || !clientSecret) {
-      throw new Error('Spotify credentials not configured');
+      console.error('Spotify credentials missing. Please set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables.');
+      throw new Error('Spotify credentials not configured - missing SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET');
     }
 
     console.log('Getting Spotify access token with Client Credentials flow...');
