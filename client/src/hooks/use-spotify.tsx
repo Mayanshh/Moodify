@@ -67,11 +67,19 @@ export function useSpotify() {
         confidence
       });
 
-      const data = await response.json();
-      
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to get recommendations');
+        const errorText = await response.text();
+        let errorData;
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { message: errorText };
+        }
+        console.error('API Error:', errorData);
+        throw new Error(errorData.message || 'Failed to get recommendations');
       }
+      
+      const data = await response.json();
       
       console.log(`Found ${data.recommendations.length} recommendations for ${emotion} mood`);
       

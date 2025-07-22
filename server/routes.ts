@@ -81,6 +81,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     console.log('Getting Spotify access token with Client Credentials flow...');
+    console.log('Client ID (first 8 chars):', clientId.substring(0, 8) + '...');
+    
     const response = await fetch('https://accounts.spotify.com/api/token', {
       method: 'POST',
       headers: {
@@ -96,10 +98,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     if (!response.ok) {
       console.error('Spotify token error:', data);
-      throw new Error(`Spotify auth failed: ${data.error_description || data.error}`);
+      console.error('Response status:', response.status);
+      console.error('Response headers:', Object.fromEntries(response.headers.entries()));
+      throw new Error(`Spotify auth failed: ${data.error_description || data.error} (Status: ${response.status})`);
     }
 
     console.log('Successfully obtained Spotify access token');
+    console.log('Token type:', data.token_type);
+    console.log('Expires in:', data.expires_in, 'seconds');
     return data.access_token;
   }
 
@@ -126,8 +132,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const genreResponse = await fetch(
         'https://api.spotify.com/v1/recommendations/available-genre-seeds',
         {
+          method: 'GET',
           headers: {
-            'Authorization': `Bearer ${accessToken}`
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
           }
         }
       );
@@ -135,36 +143,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!genreResponse.ok) {
         const genreErrorText = await genreResponse.text();
         console.error('Failed to get genre seeds:', genreResponse.status, genreErrorText);
-        return res.status(400).json({ message: "Failed to access Spotify API", error: genreErrorText });
+        console.error('Request headers:', genreResponse.headers);
+        console.error('Response URL:', genreResponse.url);
+        return res.status(400).json({ 
+          message: "Failed to access Spotify API for genre seeds", 
+          error: genreErrorText,
+          status: genreResponse.status,
+          url: genreResponse.url
+        });
       }
 
-      const genreData = await genreResponse.json();
-      console.log('Available genres:', genreData.genres.slice(0, 10));
+      let selectedGenre = 'pop'; // Default fallback
+      
+      try {
+        const genreData = await genreResponse.json();
+        console.log('Available genres:', genreData.genres?.slice(0, 10) || 'No genres found');
 
-      // Map emotions to available Spotify genres
-      const emotionToGenres: Record<string, string[]> = {
-        happy: ['pop', 'dance', 'funk', 'disco'],
-        sad: ['blues', 'folk', 'indie'],
-        angry: ['rock', 'metal', 'punk'],
-        surprised: ['electronic', 'jazz', 'funk'],
-        neutral: ['pop', 'indie', 'alternative'],
-        fearful: ['ambient', 'classical'],
-        disgusted: ['grunge', 'alternative', 'punk']
-      };
+        if (genreData.genres && genreData.genres.length > 0) {
+          // Map emotions to available Spotify genres
+          const emotionToGenres: Record<string, string[]> = {
+            happy: ['pop', 'dance', 'funk', 'disco'],
+            sad: ['blues', 'folk', 'indie'],
+            angry: ['rock', 'metal', 'punk'],
+            surprised: ['electronic', 'jazz', 'funk'],
+            neutral: ['pop', 'indie', 'alternative'],
+            fearful: ['ambient', 'classical'],
+            disgusted: ['grunge', 'alternative', 'punk']
+          };
 
-      const possibleGenres = emotionToGenres[emotion.toLowerCase()] || emotionToGenres.neutral;
-      const availableGenres = genreData.genres.filter(g => possibleGenres.includes(g));
-      const selectedGenre = availableGenres.length > 0 
-        ? availableGenres[Math.floor(Math.random() * availableGenres.length)]
-        : genreData.genres[Math.floor(Math.random() * Math.min(10, genreData.genres.length))];
+          const possibleGenres = emotionToGenres[emotion.toLowerCase()] || emotionToGenres.neutral;
+          const availableGenres = genreData.genres.filter(g => possibleGenres.includes(g));
+          selectedGenre = availableGenres.length > 0 
+            ? availableGenres[Math.floor(Math.random() * availableGenres.length)]
+            : genreData.genres[Math.floor(Math.random() * Math.min(10, genreData.genres.length))];
+        }
+      } catch (parseError) {
+        console.error('Failed to parse genre response, using fallback genre:', parseError);
+      }
 
       // Get recommendations from Spotify
       console.log(`Making Spotify API request for genre: ${selectedGenre}`);
       const recommendationsResponse = await fetch(
-        `https://api.spotify.com/v1/recommendations?seed_genres=${selectedGenre}&limit=10`,
+        `https://api.spotify.com/v1/recommendations?seed_genres=${encodeURIComponent(selectedGenre)}&limit=10`,
         {
+          method: 'GET',
           headers: {
-            'Authorization': `Bearer ${accessToken}`
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
           }
         }
       );
@@ -176,8 +201,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('Spotify API response body:', responseText);
       
       if (!recommendationsResponse.ok) {
-        console.error('Spotify API error - Status:', recommendationsResponse.status, 'Body:', responseText);
-        return res.status(400).json({ message: "Failed to get Spotify recommendations", error: responseText });
+        console.error('Spotify recommendations API error:');
+        console.error('- Status:', recommendationsResponse.status);
+        console.error('- Status Text:', recommendationsResponse.statusText);
+        console.error('- URL:', recommendationsResponse.url);
+        console.error('- Body:', responseText);
+        return res.status(400).json({ 
+          message: "Failed to get Spotify recommendations", 
+          error: responseText,
+          status: recommendationsResponse.status,
+          statusText: recommendationsResponse.statusText,
+          url: recommendationsResponse.url
+        });
       }
 
       // Try to parse the response
