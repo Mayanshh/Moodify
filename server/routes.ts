@@ -127,59 +127,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         confidence: confidence || 80
       });
 
-      // First, let's get available genre seeds to verify our API access
-      console.log('Fetching available genre seeds from Spotify...');
-      const genreResponse = await fetch(
-        'https://api.spotify.com/v1/recommendations/available-genre-seeds',
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+      // Map emotions to known Spotify genres (skip API call for genre seeds)
+      console.log('Selecting genre based on emotion...');
+      const emotionToGenres: Record<string, string[]> = {
+        happy: ['pop', 'dance', 'funk', 'disco'],
+        sad: ['blues', 'folk', 'indie'],
+        angry: ['rock', 'metal', 'punk'],
+        surprised: ['electronic', 'jazz', 'funk'],
+        neutral: ['pop', 'indie', 'alternative'],
+        fearful: ['ambient', 'classical'],
+        disgusted: ['grunge', 'alternative', 'punk']
+      };
 
-      if (!genreResponse.ok) {
-        const genreErrorText = await genreResponse.text();
-        console.error('Failed to get genre seeds:', genreResponse.status, genreErrorText);
-        console.error('Request headers:', genreResponse.headers);
-        console.error('Response URL:', genreResponse.url);
-        return res.status(400).json({ 
-          message: "Failed to access Spotify API for genre seeds", 
-          error: genreErrorText,
-          status: genreResponse.status,
-          url: genreResponse.url
-        });
-      }
-
-      let selectedGenre = 'pop'; // Default fallback
-      
-      try {
-        const genreData = await genreResponse.json();
-        console.log('Available genres:', genreData.genres?.slice(0, 10) || 'No genres found');
-
-        if (genreData.genres && genreData.genres.length > 0) {
-          // Map emotions to available Spotify genres
-          const emotionToGenres: Record<string, string[]> = {
-            happy: ['pop', 'dance', 'funk', 'disco'],
-            sad: ['blues', 'folk', 'indie'],
-            angry: ['rock', 'metal', 'punk'],
-            surprised: ['electronic', 'jazz', 'funk'],
-            neutral: ['pop', 'indie', 'alternative'],
-            fearful: ['ambient', 'classical'],
-            disgusted: ['grunge', 'alternative', 'punk']
-          };
-
-          const possibleGenres = emotionToGenres[emotion.toLowerCase()] || emotionToGenres.neutral;
-          const availableGenres = genreData.genres.filter(g => possibleGenres.includes(g));
-          selectedGenre = availableGenres.length > 0 
-            ? availableGenres[Math.floor(Math.random() * availableGenres.length)]
-            : genreData.genres[Math.floor(Math.random() * Math.min(10, genreData.genres.length))];
-        }
-      } catch (parseError) {
-        console.error('Failed to parse genre response, using fallback genre:', parseError);
-      }
+      const possibleGenres = emotionToGenres[emotion.toLowerCase()] || emotionToGenres.neutral;
+      const selectedGenre = possibleGenres[Math.floor(Math.random() * possibleGenres.length)];
 
       // Get recommendations from Spotify
       console.log(`Making Spotify API request for genre: ${selectedGenre}`);
