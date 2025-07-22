@@ -109,6 +109,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     return data.access_token;
   }
 
+  // Cache for available genres
+  let availableGenres: string[] | null = null;
+
+  // Get available genre seeds from Spotify
+  async function getAvailableGenres(accessToken: string): Promise<string[]> {
+    if (availableGenres) {
+      return availableGenres;
+    }
+
+    try {
+      const response = await fetch('https://api.spotify.com/v1/recommendations/available-genre-seeds', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        availableGenres = data.genres;
+        console.log('Available Spotify genres:', availableGenres?.slice(0, 10), '... and more');
+        return availableGenres || [];
+      } else {
+        console.warn('Failed to fetch available genres, using fallback');
+        return ['pop', 'rock', 'jazz', 'classical', 'electronic', 'hip-hop'];
+      }
+    } catch (error) {
+      console.warn('Error fetching available genres:', error);
+      return ['pop', 'rock', 'jazz', 'classical', 'electronic', 'hip-hop'];
+    }
+  }
+
   // Get music recommendations based on emotion
   app.post("/api/recommendations", async (req, res) => {
     try {
@@ -121,68 +154,96 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get Spotify access token
       const accessToken = await getSpotifyAccessToken();
 
+      // Get available genres from Spotify
+      const genres = await getAvailableGenres(accessToken);
+
       // Create emotion session
       const session = await storage.createEmotionSession({
         emotion,
         confidence: confidence || 80
       });
 
-      // Map emotions to known Spotify genres (skip API call for genre seeds)
+      // Map emotions to Spotify-compatible genres
       console.log('Selecting genre based on emotion...');
       const emotionToGenres: Record<string, string[]> = {
-        happy: ['pop', 'dance', 'funk', 'disco'],
-        sad: ['blues', 'folk', 'indie'],
-        angry: ['rock', 'metal', 'punk'],
-        surprised: ['electronic', 'jazz', 'funk'],
-        neutral: ['pop', 'indie', 'alternative'],
-        fearful: ['ambient', 'classical'],
-        disgusted: ['grunge', 'alternative', 'punk']
+        happy: genres.filter(g => ['pop', 'dance', 'funk', 'disco', 'soul', 'gospel', 'latin', 'reggae'].includes(g)),
+        sad: genres.filter(g => ['blues', 'folk', 'country', 'acoustic', 'singer-songwriter', 'indie-folk'].includes(g)),
+        angry: genres.filter(g => ['rock', 'metal', 'punk', 'hardcore', 'alternative', 'grunge'].includes(g)),
+        surprised: genres.filter(g => ['electronic', 'jazz', 'funk', 'experimental', 'world-music'].includes(g)),
+        neutral: genres.filter(g => ['pop', 'indie', 'alternative', 'rock', 'folk'].includes(g)),
+        fearful: genres.filter(g => ['ambient', 'classical', 'new-age', 'chill', 'downtempo'].includes(g)),
+        disgusted: genres.filter(g => ['grunge', 'alternative', 'punk', 'industrial', 'metal'].includes(g))
       };
 
-      const possibleGenres = emotionToGenres[emotion.toLowerCase()] || emotionToGenres.neutral;
-      const selectedGenre = possibleGenres[Math.floor(Math.random() * possibleGenres.length)];
-
-      // Get recommendations from Spotify
-      console.log(`Making Spotify API request for genre: ${selectedGenre}`);
-      const recommendationsResponse = await fetch(
-        `https://api.spotify.com/v1/recommendations?seed_genres=${encodeURIComponent(selectedGenre)}&limit=10`,
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
-      console.log(`Spotify API response status: ${recommendationsResponse.status}`);
-      
-      // Read response body as text first to see what we got
-      const responseText = await recommendationsResponse.text();
-      console.log('Spotify API response body:', responseText);
-      
-      if (!recommendationsResponse.ok) {
-        console.error('Spotify recommendations API error:');
-        console.error('- Status:', recommendationsResponse.status);
-        console.error('- Status Text:', recommendationsResponse.statusText);
-        console.error('- URL:', recommendationsResponse.url);
-        console.error('- Body:', responseText);
-        return res.status(400).json({ 
-          message: "Failed to get Spotify recommendations", 
-          error: responseText,
-          status: recommendationsResponse.status,
-          statusText: recommendationsResponse.statusText,
-          url: recommendationsResponse.url
-        });
+      // Get possible genres for the emotion, fallback to top genres if none match
+      let possibleGenres = emotionToGenres[emotion.toLowerCase()] || [];
+      if (possibleGenres.length === 0) {
+        possibleGenres = genres.slice(0, 5); // Use first 5 available genres as fallback
       }
 
-      // Try to parse the response
+      const selectedGenre = possibleGenres[Math.floor(Math.random() * possibleGenres.length)];
+
+      // Get recommendations from Spotify using search as fallback if recommendations fail
+      console.log(`Making Spotify API request for genre: ${selectedGenre}`);
+      
       let recommendationsData;
+      
+      // Try recommendations API first
       try {
-        recommendationsData = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('Failed to parse Spotify response:', parseError, 'Response text:', responseText);
-        return res.status(500).json({ message: "Invalid response from Spotify API" });
+        const recommendationsResponse = await fetch(
+          `https://api.spotify.com/v1/recommendations?seed_genres=${encodeURIComponent(selectedGenre)}&limit=10&market=US`,
+          {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        console.log(`Spotify recommendations API response status: ${recommendationsResponse.status}`);
+
+        if (recommendationsResponse.ok) {
+          recommendationsData = await recommendationsResponse.json();
+        } else {
+          throw new Error(`Recommendations API failed with status ${recommendationsResponse.status}`);
+        }
+      } catch (error) {
+        console.log('Recommendations API failed, trying search API as fallback...');
+        
+        // Fallback to search API
+        const searchQuery = `genre:${selectedGenre}`;
+        const searchResponse = await fetch(
+          `https://api.spotify.com/v1/search?q=${encodeURIComponent(searchQuery)}&type=track&limit=10&market=US`,
+          {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        console.log(`Spotify search API response status: ${searchResponse.status}`);
+
+        if (!searchResponse.ok) {
+          const errorText = await searchResponse.text();
+          console.error('Both recommendations and search APIs failed');
+          return res.status(400).json({ 
+            message: "Failed to get Spotify recommendations", 
+            error: errorText,
+            status: searchResponse.status
+          });
+        }
+
+        const searchData = await searchResponse.json();
+        recommendationsData = {
+          tracks: searchData.tracks.items
+        };
+      }
+
+      if (!recommendationsData.tracks || recommendationsData.tracks.length === 0) {
+        return res.status(400).json({ message: "No tracks found for the selected genre" });
       }
       
       // Store recommendations
