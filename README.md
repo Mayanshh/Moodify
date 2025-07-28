@@ -1,5 +1,5 @@
 
-# MoodTunes 🎵
+# Moodify 🎵
 
 An emotion-based music recommendation system that detects your facial expressions and suggests Spotify tracks that match your mood.
 
